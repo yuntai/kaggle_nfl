@@ -1,3 +1,4 @@
+
 - competition home page
   https://www.kaggle.com/c/nfl-big-data-bowl-2020/data
 
@@ -6,6 +7,10 @@
 
 - No. 3 solution
   https://www.kaggle.com/c/nfl-big-data-bowl-2020/discussion/119400
+
+The followings is nothing but a summarization of what is explained in 
+https://www.kaggle.com/c/nfl-big-data-bowl-2020/discussion/119400; no credit is claimed.
+
 
 # Data processing
   - always be from left to right
