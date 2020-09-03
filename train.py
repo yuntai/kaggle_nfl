@@ -88,7 +88,7 @@ def CRPSLoss(y_pred, y):
     h = ((yards_grid - y[:,None]) >= 0).float()
     return torch.mean((y_pred.cumsum(-1) - h)**2)
 
-def run_epoch(loader, model, opt=None, scheduler=None, _epoch=-1):
+def run_epoch(model, loader, opt=None, scheduler=None, _epoch=-1):
     model.eval() if opt is None else model.train()
     dev = next(model.parameters()).device
     batch_id = 0
@@ -122,7 +122,7 @@ def run_epoch(loader, model, opt=None, scheduler=None, _epoch=-1):
     torch.cuda.empty_cache()
     return epoch_loss / len(loader)
 
-def setup_run(max_steps):
+def setup_train(max_steps):
     model = NFLRushNet()
     n_all_param = sum([p.nelement() for p in model.parameters() if p.requires_grad])
     logging(f'#params = {n_all_param/1e6:.2f}M')
@@ -156,10 +156,10 @@ def setup_run(max_steps):
     return para_model, optimizer, scheduler
 
 def run_cv(X, y, groups, idx_2017):
-    print(X.shape)
     cv = GroupKFold(n_splits=8)
-    for fold_ix, (train_ix, test_ix) in enumerate(cv.split(X, y, groups)):
-        train_ix = list(train_ix) + idx_2017
+    ixs = list(set(list(range(X.shape[0]))) - set(idx_2017))
+    for fold_ix, (train_ix, test_ix) in enumerate(cv.split(X[ixs], y[ixs], groups[ixs])):
+        train_ix = list(train_ix) + idx_2017 # add 2017 data to train set
         train_dataset = RushDataset(X[train_ix], y[train_ix])
         val_dataset = RushDataset(X[test_ix], y[test_ix], aug=False)
         train_loader = DataLoader(train_dataset, batch_size=args.bsz, shuffle=True, drop_last=True)
@@ -171,7 +171,7 @@ def run_fold(train_loader, val_loader, fold_ix):
     max_steps = args.max_epochs * len(train_loader)
     logging(f'max steps = {max_steps}')
 
-    model, opt, scheduler = setup_run(max_steps)
+    model, opt, scheduler = setup_train(max_steps)
 
     train_step = 0
     start_epoch = 1
@@ -179,12 +179,12 @@ def run_fold(train_loader, val_loader, fold_ix):
 
     for i in range(start_epoch, args.max_epochs+1):
         start = time.time()
-        train_loss = run_epoch(train_loader, model, opt, scheduler, _epoch=i)
+        train_loss = run_epoch(model, train_loader, opt, scheduler, _epoch=i)
         writer.add_scalar(f'loss/train/{fold_ix}', train_loss, i)
         if not args.noval and val_loader is not None:
-            val_loss = run_epoch(val_loader, model)
+            val_loss = run_epoch(model, val_loader)
             end = time.time()
-            msg = f"Epoch {i:2d} | {end-start:.2f} sec | LR {opt.param_groups[0]['lr']:.7f} | Train Loss {train_loss:.5f} |  Val Loss {val_loss:.5f}"
+            msg = f"Epoch {i:2d}|{end-start:.2f}s|LR {opt.param_groups[0]['lr']:.7f}|Train Loss {train_loss:.5f}|Val Loss {val_loss:.5f}"
             if val_loss < best_val_loss:
                 exp.save_checkpoint(model, opt, fold_ix=fold_ix)
                 best_val_loss = val_loss
@@ -192,7 +192,7 @@ def run_fold(train_loader, val_loader, fold_ix):
             writer.add_scalar(f'loss/val/{fold_ix}', val_loss, i)
         else:
             end = time.time()
-            msg = f"Epoch {i:2d} | {end-start:.2f} sec | LR {opt.param_groups[0]['lr']:.7f} | Train Loss {train_loss:.5f}"
+            msg = f"Epoch {i:2d}|{end-start:.2f}s|LR {opt.param_groups[0]['lr']:.7f} |Train Loss {train_loss:.5f}"
         print(msg)
         lr = opt.param_groups[0]['lr']
         writer.add_scalar('learning_rate/{fold_ix}', lr, i)
@@ -203,9 +203,7 @@ def run_fold(train_loader, val_loader, fold_ix):
     print(f"fold({fold_ix} best val={best_val_loss}")
 
 if __name__ == '__main__':
-    D, idx_2017, idxs = load_data(pathlib.Path('.'))
-    groups = D[0]
-    X = D[2]
-    y = D[4]
+    D, idx_2017 = load_data(pathlib.Path('.'))
+    X, y, mask, groups = D
 
     run_cv(X, y, groups, idx_2017)
