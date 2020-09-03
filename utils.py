@@ -238,11 +238,13 @@ class Experiment:
         log_path = self.exp_dir/'log.txt' if log else None
         return functools.partial(logging, log_path=log_path, print_=print_, log=log)
 
-    def save_checkpoint(self, model, optimizer, epoch=-1):
+    def save_checkpoint(self, model, optimizer, fold_ix=-1, epoch=-1):
         epoch = f"_{epoch}" if epoch >=0 else ""
-        with open(self.exp_dir/f'model{epoch}.pt', 'wb') as f:
+        exp_dir = self.exp_dir if fold_ix == -1 else self.exp_dir/f"{fold_ix}"
+        exp_dir.mkdir(parents=True, exist_ok=True)
+        with open(exp_dir/f'model{epoch}.pt', 'wb') as f:
             torch.save(model, f)
-        with open(self.exp_dir/f'optimizer{epoch}.pt', 'wb') as f:
+        with open(exp_dir/f'optimizer{epoch}.pt', 'wb') as f:
             torch.save(optimizer.state_dict(), f)
 
 
