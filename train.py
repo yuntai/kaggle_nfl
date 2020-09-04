@@ -32,8 +32,9 @@ parser.add_argument('--seed', type=int, default=1111, help="random seed")
 parser.add_argument('--nocuda', action='store_true', help="do not run with gpu")
 parser.add_argument('--name', type=str, default="nflrush", help="name of the experiment")
 parser.add_argument('--fp16', action='store_true', help="use mixed precision from apex to save memory")
-parser.add_argument('--lr', type=float, default=0.0005, help='initial learning rate (0.0001|5 for adam|sgd)')
 parser.add_argument('--max_epochs', type=int, default=50, help='upper epoch limit')
+
+parser.add_argument('--lr', type=float, default=0.0005, help='initial learning rate (0.0001|5 for adam|sgd)')
 parser.add_argument('-s', '--scheduler', default='onecycle', type=str, choices=['cosine', 'inv_sqrt', 'dev_perf','onecycle']),
 
 # Cosine
@@ -48,7 +49,7 @@ parser.add_argument('--patience', type=int, default=5, help='patience')
 parser.add_argument('--lr_min', type=float, default=0.0, help='minimum learning rate during annealing')
 
 # Onecycle
-parser.add_argument('--lr_max', type=float, default=0.001, help='maximum learning rate in onecycle scheduler')
+parser.add_argument('--lr_max', type=float, default=0.0005, help='maximum learning rate in onecycle scheduler')
 
 parser.add_argument('--grad_clip', type=float, default=0.25, help='gradient clipping')
 parser.add_argument('--log_interval', type=int, default=200, help='report interval')
@@ -61,7 +62,7 @@ parser.add_argument('--dropout', type=float, default=0.3, help='dropout rate')
 # cv & bagging
 parser.add_argument('--n_splits', type=int, default=5, help='do not run validation')
 parser.add_argument('--bagging_p', type=float, default=0.8, help='bagging ratio')
-parser.add_argument('--bagging_size', type=float, default=4, help='bagging ratio')
+parser.add_argument('--bagging_size', type=int, default=0, help='bagging ratio')
 
 args = parser.parse_args()
 
@@ -183,10 +184,11 @@ def run_cv(X, X_aug, y, mask, groups, idx_2017, n_splits=5):
     for fold_ix, (train_ix, test_ix) in enumerate(cv.split(X[ixs], y[ixs], groups[ixs])):
         train_ix = list(train_ix) + idx_2017 # add 2017 data to train set
         n_samples = int(len(train_ix) * args.bagging_p)
-
+        if args.bagging_size <= 1:
+            args.bagging_size = 1
         for i in range(args.bagging_size):
-            train_ix = resample(train_ix, replace=True, n_samples=n_samples, random_state=random_state)
-
+            if args.bagging_size > 1:
+                train_ix = resample(train_ix, replace=True, n_samples=n_samples, random_state=random_state)
             train_dataset = RushDataset(X[train_ix], X_aug[train_ix], y[train_ix], mask[train_ix])
             val_dataset = RushDataset(X[test_ix], X_aug[train_ix], y[test_ix], mask[test_ix], aug=False)
 
@@ -196,6 +198,7 @@ def run_cv(X, X_aug, y, mask, groups, idx_2017, n_splits=5):
             val_loss = train_loop(train_loader, val_loader, fold_ix)
             losses.append(val_loss)
             random_state += 1
+
     print("cv mean loss=", np.array(losses).mean())
 
 def train_loop(train_loader, val_loader, fold_ix=-1):
