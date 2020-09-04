@@ -62,6 +62,7 @@ def preprocess(datadir):
     cols = ['X', 'Y', 'dx', 'dy', 'X', 'Y_aug', 'dx', 'dy_aug']
 
     features = []
+    features_aug = []
     for _id, g in tqdm.tqdm(play_group):
         offense = g.loc[g.Offender & ~g.Rusher, cols].values
         diffense = g.loc[~g.Offender, cols].values
@@ -69,18 +70,21 @@ def preprocess(datadir):
 
         f12 = diffense[:,None] - offense[None]
         f34 = np.repeat((diffense - rusher)[:,None], repeats=10, axis=1)
-        f5 = np.repeat(diffense[:,2:][:,None], repeats=10, axis=1)
-        f     = np.concatenate([f12[..., :4], f34[..., 9:12], f5[...,16:18]], axis=-1)
-        f_aug = np.concatenate([f12[...,4:8], f34[...,12:16], f5[...,18:20]], axis=-1)
-        f = np.concatenate([f, f_aug], axis=-1)
-        assert np.isnan(f).sum() == 0, f"nan found in features play_id({_id})"
+        f5 = np.repeat(diffense[:,[2,3,6,7]][:,None], repeats=10, axis=1)
+
+        f     = np.concatenate([f12[...,:4], f34[...,:4], f5[...,:2]], axis=-1)
+        f_aug = np.concatenate([f12[...,4:], f34[...,4:], f5[...,2:]], axis=-1)
+
         features.append(f)
+        features_aug.append(f_aug)
 
     YARD_GRID = np.arange(-99, 100)[None]
     EYE = np.eye(199)
 
     features = np.stack(features).transpose((0, 3, 1, 2)) # channel first
+    features_aug = np.stack(features_aug).transpose((0, 3, 1, 2)) # channel first
     assert np.isnan(features).sum() == 0, f"nan found in features"
+    assert np.isnan(features_aug).sum() == 0, f"nan found in features"
 
     play_ids = play_df.PlayId.values
     yards = EYE[play_df.Yards.values + 99]
@@ -90,7 +94,7 @@ def preprocess(datadir):
     game_ids = play_df.GameId.values
     idxs_2017 = play_df.loc[play_df.Season == 2017].index.tolist()
 
-    D = [features, yards, yards_clipped, yard_mask, game_ids]
+    D = [features, features_aug, yards, yards_clipped, yard_mask, game_ids]
     assert all(D[0].shape[0] == d.shape[0] for d in D)
     D += [idxs_2017]
 

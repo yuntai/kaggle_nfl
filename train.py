@@ -174,7 +174,7 @@ def setup_train(max_steps):
 
     return para_model, optimizer, scheduler
 
-def run_cv(X, y, mask, groups, idx_2017, n_splits=5):
+def run_cv(X, X_aug, y, mask, groups, idx_2017, n_splits=5):
     cv = GroupKFold(n_splits=n_splits)
     ixs = list(set(list(range(X.shape[0]))) - set(idx_2017)) # non 2017 data
     losses = []
@@ -187,8 +187,8 @@ def run_cv(X, y, mask, groups, idx_2017, n_splits=5):
         for i in range(args.bagging_size):
             train_ix = resample(train_ix, replace=True, n_samples=n_samples, random_state=random_state)
 
-            train_dataset = RushDataset(X[train_ix], y[train_ix], mask[train_ix])
-            val_dataset = RushDataset(X[test_ix], y[test_ix], mask[test_ix], aug=False)
+            train_dataset = RushDataset(X[train_ix], X_aug[train_ix], y[train_ix], mask[train_ix])
+            val_dataset = RushDataset(X[test_ix], X_aug[train_ix], y[test_ix], mask[test_ix], aug=False)
 
             train_loader = DataLoader(train_dataset, batch_size=args.bsz, shuffle=True, drop_last=True)
             val_loader = DataLoader(val_dataset, batch_size=args.bsz, shuffle=True, drop_last=True)
@@ -238,5 +238,5 @@ def train_loop(train_loader, val_loader, fold_ix=-1):
     return best_val_loss
 
 if __name__ == '__main__':
-    X, y, y_clipped, mask, groups, idx_2017 = load_data(pathlib.Path('.'))
-    run_cv(X, y_clipped, mask, groups, idx_2017, args.n_splits)
+    X, X_aug, y, y_clipped, mask, groups, idx_2017 = load_data(pathlib.Path('.'))
+    run_cv(X, X_aug, y_clipped, mask, groups, idx_2017, args.n_splits)
