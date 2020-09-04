@@ -83,6 +83,7 @@ def preprocess(datadir):
 
     features = np.stack(features).transpose((0, 3, 1, 2)) # channel first
     features_aug = np.stack(features_aug).transpose((0, 3, 1, 2)) # channel first
+
     assert np.isnan(features).sum() == 0, f"nan found in features"
     assert np.isnan(features_aug).sum() == 0, f"nan found in features"
 
