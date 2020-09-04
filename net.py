@@ -3,12 +3,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import optim
 from torch.nn.utils import weight_norm
-from common import YARDS_CLIP
 
 class NFLRushNet(nn.Module):
     def __init__(self, dropout=0.3):
         super().__init__()
-        #target_size = len(range(*YARDS_CLIP))+1
         target_size = 199
         n_channels = 10
         h, w = 11, 10 # (offense, defense)
@@ -34,7 +32,6 @@ class NFLRushNet(nn.Module):
         self.avg_pool1 = nn.AvgPool2d((h, 1))
 
         self.bn1 = nn.BatchNorm1d(128)
-        self.do1 = nn.Dropout(dropout)
 
         self.net2 = nn.ModuleList([
             nn.Sequential(
@@ -57,7 +54,6 @@ class NFLRushNet(nn.Module):
         self.max_pool2 = nn.MaxPool1d(w)
         self.avg_pool2 = nn.AvgPool1d(w)
 
-        self.do2 = nn.Dropout(dropout)
 
         self.net3 = nn.ModuleList([
             nn.Sequential(
@@ -72,7 +68,7 @@ class NFLRushNet(nn.Module):
             ),
         ])
 
-        self.do3 = nn.Dropout(dropout)
+        self.do = nn.Dropout(dropout)
         self.out = nn.Linear(256, target_size)
 
         self.apply(self.weights_init)
@@ -85,7 +81,6 @@ class NFLRushNet(nn.Module):
 
         x = (0.3*self.max_pool1(x) + 0.7*self.avg_pool1(x)).squeeze()
 
-        x = self.do1(x)
         x = self.bn1(x)
 
         for i in range(len(self.net2)):
@@ -93,16 +88,15 @@ class NFLRushNet(nn.Module):
 
         x = (0.3*self.max_pool2(x) + 0.7*self.avg_pool2(x)).squeeze()
 
-        x = self.do2(x)
-
         for i in range(len(self.net3)):
             x = self.net3[i](x)
 
-        x = self.do3(x)
+        x = self.do(x)
 
         x = self.out(x)
 
-        return F.softmax(x, dim=-1)
+        return x
+        #return F.softmax(x, dim=-1)
 
     def wnorm(self):
         self.conv = weight_norm(self.conv, name="weight")
@@ -130,7 +124,7 @@ if __name__ == '__main__':
     net = NFLRushNet()
     bsz=5;n_channels=10;h=10;w=11
     print(net)
-    x = torch.rand((bsz, n_channels, h , w))
+    x = torch.rand((bsz, n_channels, w , h))
     x = net(x)
     print(x.shape)
 
