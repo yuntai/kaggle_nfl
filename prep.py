@@ -54,6 +54,7 @@ def preprocess(datadir):
     train.loc[__mask, 'Y_aug'] = 53.33 - train.loc[__mask, 'Y_aug']
     train.loc[__mask, 'dx'] = -train.loc[__mask, 'dx']
     train.loc[__mask, 'dy'] = -train.loc[__mask, 'dy']
+    train.loc[__mask, 'dy_aug'] = -train.loc[__mask, 'dy_aug']
     train.loc[__mask, 'YardLine'] = 100 - train.loc[__mask, 'YardLine']
 
     # create augmented feature for all rows and select during training
