@@ -3,11 +3,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import optim
 from torch.nn.utils import weight_norm
+from common import YARDS_CLIP
 
 class NFLRushNet(nn.Module):
     def __init__(self, dropout=0.3):
         super().__init__()
-        target_size = 199
+        target_size = YARDS_CLIP[1] - YARDS_CLIP[0] + 1
         n_channels = 10
         h, w = 11, 10 # (offense, defense)
         lambda_ = 0.7
