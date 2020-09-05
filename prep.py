@@ -29,7 +29,7 @@ def preprocess(datadir):
     assert train[train.Dir.isna() & (train.S != 0.0)].size == 0
     train.Dir.fillna(0., inplace=True)
 
-    train['dir']= -(train.Dir*np.pi/180. - np.pi/2.) # adjusted & radian
+    train['dir'] = -(train.Dir * np.pi/180. - np.pi/2.) # adjusted & radian
     train['Y_aug'] = 53.33 - train['Y'] # y coordinates flipe
 
     # field postion NA when YardLine = 50
@@ -53,10 +53,11 @@ def preprocess(datadir):
     train.loc[__mask, 'Y'] = 53.33 - train.loc[__mask, 'Y']
     train.loc[__mask, 'Y_aug'] = 53.33 - train.loc[__mask, 'Y_aug']
     train.loc[__mask, 'dx'] = -train.loc[__mask, 'dx']
+    train.loc[__mask, 'dy'] = -train.loc[__mask, 'dy']
     train.loc[__mask, 'YardLine'] = 100 - train.loc[__mask, 'YardLine']
 
     # create augmented feature for all rows and select during training
-    play_group = train.groupby('PlayId')
+    play_group = train.groupby('PlayId', sort=True)
     play_df = play_group[['Yards', 'YardLine', 'Season', 'GameId']].first().reset_index()
     play_df['YardsClipped'] = play_df.Yards.clip(YARDS_CLIP[0], YARDS_CLIP[1])
 
