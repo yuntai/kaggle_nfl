@@ -36,7 +36,7 @@ def parse_args():
     parser.add_argument('--fp16', action='store_true', help="use mixed precision from apex to save memory")
     parser.add_argument('--max_epochs', type=int, default=50, help='upper epoch limit')
 
-    parser.add_argument('--lr', type=float, default=0.0005, help='initial learning rate (0.0001|5 for adam|sgd)')
+    parser.add_argument('--lr', type=float, default=0.001, help='initial learning rate (0.0001|5 for adam|sgd)')
     parser.add_argument('-s', '--scheduler', default='onecycle', type=str, choices=['cosine', 'inv_sqrt', 'dev_perf','onecycle']),
 
     # Cosine
@@ -51,7 +51,7 @@ def parse_args():
     parser.add_argument('--lr_min', type=float, default=0.0, help='minimum learning rate during annealing')
 
     # Onecycle
-    parser.add_argument('--lr_max', type=float, default=0.001, help='maximum learning rate in onecycle scheduler')
+    parser.add_argument('--lr_max', type=float, default=0.0005, help='maximum learning rate in onecycle scheduler')
 
     parser.add_argument('--grad_clip', type=float, default=0.25, help='gradient clipping')
     parser.add_argument('--log_interval', type=int, default=200, help='report interval')
@@ -172,24 +172,24 @@ def setup_train(max_steps):
 
     return para_model, optimizer, scheduler
 
-def run_cv(X, X_aug, y, y_clipped, mask, groups, ixs_2017, n_splits=5):
+def run_cv(X, X_aug, y, mask, groups, ixs_2017, n_splits=5):
     cv = GroupKFold(n_splits=n_splits)
 
-    D = [X, X_aug, y, y_clipped, mask, groups]
+    D = [X, X_aug, y, mask, groups]
     D_2017 = [d[ixs_2017] for d in D]
 
     ixs = list(set(range(X.shape[0])) - set(ixs_2017)) # non 2017 data
     D = [d[ixs] for d in D]
 
-    X, X_aug, y, y_clipped, mask, groups = D
+    X, X_aug, y, mask, groups = D
     losses = []
 
     for fold_ix, (train_ix, test_ix) in enumerate(cv.split(X, y, groups)):
         D_tr = [np.concatenate([x[train_ix], x_2017]) for x, x_2017 in zip(D, D_2017)]
-        X_tr, X_aug_tr, y_tr, y_clipped_tr, mask_tr, groups_tr = D_tr
+        X_tr, X_aug_tr, y_tr, mask_tr, groups_tr = D_tr
 
-        train_dataset = RushDataset(X_tr, X_aug_tr, y_clipped_tr, mask_tr)
-        val_dataset = RushDataset(X[test_ix], X_aug[test_ix], y_clipped[test_ix], mask[test_ix], aug=False)
+        train_dataset = RushDataset(X_tr, X_aug_tr, y_tr, mask_tr)
+        val_dataset = RushDataset(X[test_ix], X_aug[test_ix], y[test_ix], mask[test_ix], aug=False)
 
         #assert len(set(test_ix) & set(ixs_2017)) == 0, "test set should not contain data from 2017"
         train_loader = DataLoader(train_dataset, batch_size=args.bsz, shuffle=True, drop_last=True)
@@ -244,5 +244,5 @@ def train_loop(train_loader, val_loader, fold_ix=0, meta={}):
     return best_val_loss
 
 if __name__ == '__main__':
-    X, X_aug, y, y_clipped, mask, groups, idx_2017 = load_data(pathlib.Path('.'))
-    run_cv(X, X_aug, y, y_clipped, mask, groups, idx_2017, args.n_splits)
+    X, X_aug, y, mask, groups, idx_2017 = load_data(pathlib.Path('.'))
+    run_cv(X, X_aug, y, mask, groups, idx_2017, args.n_splits)

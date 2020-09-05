@@ -4,7 +4,8 @@ import numpy as np
 import tqdm
 import torch
 import gzip
-YARDS_CLIP = [-15, 50]
+
+from common import YARDS_CLIP
 
 def get_one_hot(targets, nb_classes):
     res = np.eye(nb_classes)[np.array(targets).reshape(-1)]
@@ -79,7 +80,7 @@ def preprocess(datadir):
         features_aug.append(f_aug)
 
     YARD_GRID = np.arange(-99, 100)[None]
-    EYE = np.eye(199)
+    EYE = np.eye(YARDS_CLIP[1]-YARDS_CLIP[0]+1)
 
     features = np.stack(features).transpose((0, 3, 1, 2)) # channel first
     features_aug = np.stack(features_aug).transpose((0, 3, 1, 2)) # channel first
@@ -87,14 +88,13 @@ def preprocess(datadir):
     assert np.isnan(features_aug).sum() == 0, f"nan found in features"
 
     play_ids = play_df.PlayId.values
-    yards = EYE[play_df.Yards.values + 99]
-    yards_clipped = EYE[play_df.YardsClipped.values + 99]
+    yards = EYE[play_df.YardsClipped.values + -YARDS_CLIP[0]]
     yard_lines = play_df.YardLine.values
     yard_mask = ((YARD_GRID <= (100 - yard_lines[:,None])) & (YARD_GRID >= -yard_lines[:,None])).astype(np.int)
     game_ids = play_df.GameId.values
     idxs_2017 = play_df.loc[play_df.Season == 2017].index.tolist()
 
-    D = [features, features_aug, yards, yards_clipped, yard_mask, game_ids]
+    D = [features, features_aug, yards, yard_mask, game_ids]
     assert all(D[0].shape[0] == d.shape[0] for d in D)
     D += [idxs_2017]
 

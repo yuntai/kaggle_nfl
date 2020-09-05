@@ -16,19 +16,25 @@ exproot = rootdir/'models'/name
 
 D = load_data(rootdir)
 assert all(d.shape[0]==D[0].shape[0] for d in D[:-1])
-X, X_aug, y, y_clipped, mask, groups, idx_2017 = D
+idx_2017 = D[-1]
 
-ixs = list(set(list(range(X.shape[0]))) - set(idx_2017)) # non 2017 data
+ixs = list(set(range(D[0].shape[0])) - set(idx_2017)) # non 2017 data
+D = [d[ixs] for d in D[:-1]]
+X, X_aug, y, mask, groups = D
 
 members = []
 dev = 'cuda'
-for _dir in islice(exproot.iterdir(), 1):
+for _dir in exproot.iterdir():
     with open(_dir/'model.pt', 'rb') as f:
         model = torch.load(f)
     model.to(dev)
     model.eval()
     members.append(model)
 
+print("members=", len(members))
+
+val_dataset = RushDataset(X, X_aug, y, mask, aug=False, tta=True)
+val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False, drop_last=True)
 
 with torch.no_grad():
     loss = 0
