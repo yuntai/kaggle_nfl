@@ -64,8 +64,8 @@ def preprocess(datadir):
     features = []
     features_aug = []
     for _id, g in tqdm.tqdm(play_group):
-        offense = g.loc[g.Offender & ~g.Rusher, cols].values
         diffense = g.loc[~g.Offender, cols].values
+        offense = g.loc[g.Offender & ~g.Rusher, cols].values
         rusher = g.loc[g.Rusher, cols].values
 
         f12 = diffense[:,None] - offense[None]

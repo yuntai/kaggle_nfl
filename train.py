@@ -16,58 +16,59 @@ import torch.nn.functional as F
 from tensorboardX import SummaryWriter
 import sklearn
 from sklearn.model_selection import GroupKFold
+from sklearn.utils import resample
 
 from setproctitle import setproctitle
 from termcolor import colored
 
 from dataset import RushDataset
 from net import NFLRushNet
-
+from common import CRPSLoss
 from prep import load_data
-from sklearn.utils import resample
 
-parser = argparse.ArgumentParser(description='NFL yardage prediction')
-parser.add_argument('-b', '--bsz', type=int, default=64, help='location of the (processed) data')
-parser.add_argument('--seed', type=int, default=1111, help="random seed")
-parser.add_argument('--nocuda', action='store_true', help="do not run with gpu")
-parser.add_argument('--name', type=str, default="nflrush", help="name of the experiment")
-parser.add_argument('--fp16', action='store_true', help="use mixed precision from apex to save memory")
-parser.add_argument('--max_epochs', type=int, default=50, help='upper epoch limit')
 
-parser.add_argument('--lr', type=float, default=0.0005, help='initial learning rate (0.0001|5 for adam|sgd)')
-parser.add_argument('-s', '--scheduler', default='onecycle', type=str, choices=['cosine', 'inv_sqrt', 'dev_perf','onecycle']),
+def parse_args():
+    parser = argparse.ArgumentParser(description='NFL yardage prediction')
+    parser.add_argument('-b', '--bsz', type=int, default=64, help='location of the (processed) data')
+    parser.add_argument('--seed', type=int, default=1111, help="random seed")
+    parser.add_argument('--nocuda', action='store_true', help="do not run with gpu")
+    parser.add_argument('--name', type=str, default="nflrush", help="name of the experiment")
+    parser.add_argument('--fp16', action='store_true', help="use mixed precision from apex to save memory")
+    parser.add_argument('--max_epochs', type=int, default=50, help='upper epoch limit')
 
-# Cosine
-parser.add_argument('--eta_min', type=float, default=1e-7, help='min learning rate for cosine scheduler')
+    parser.add_argument('--lr', type=float, default=0.0005, help='initial learning rate (0.0001|5 for adam|sgd)')
+    parser.add_argument('-s', '--scheduler', default='onecycle', type=str, choices=['cosine', 'inv_sqrt', 'dev_perf','onecycle']),
 
-# dev_perf
-parser.add_argument('--warmup_step', type=int, default=5000, help='upper epoch limit')
+    # Cosine
+    parser.add_argument('--eta_min', type=float, default=1e-7, help='min learning rate for cosine scheduler')
 
-# ReduceLROnPlateau
-parser.add_argument('--decay_rate', type=float, default=0.5, help='decay factor when ReduceLROnPlateau is used')
-parser.add_argument('--patience', type=int, default=5, help='patience')
-parser.add_argument('--lr_min', type=float, default=0.0, help='minimum learning rate during annealing')
+    # dev_perf
+    parser.add_argument('--warmup_step', type=int, default=5000, help='upper epoch limit')
 
-# Onecycle
-parser.add_argument('--lr_max', type=float, default=0.0005, help='maximum learning rate in onecycle scheduler')
+    # ReduceLROnPlateau
+    parser.add_argument('--decay_rate', type=float, default=0.5, help='decay factor when ReduceLROnPlateau is used')
+    parser.add_argument('--patience', type=int, default=5, help='patience')
+    parser.add_argument('--lr_min', type=float, default=0.0, help='minimum learning rate during annealing')
 
-parser.add_argument('--grad_clip', type=float, default=0.25, help='gradient clipping')
-parser.add_argument('--log_interval', type=int, default=200, help='report interval')
-parser.add_argument('--multi_gpu', type=bool, default=True, help='use multiple GPU')
-parser.add_argument('--noval', action='store_true', help='do not run validation')
+    # Onecycle
+    parser.add_argument('--lr_max', type=float, default=0.001, help='maximum learning rate in onecycle scheduler')
 
-# model
-parser.add_argument('--dropout', type=float, default=0.3, help='dropout rate')
+    parser.add_argument('--grad_clip', type=float, default=0.25, help='gradient clipping')
+    parser.add_argument('--log_interval', type=int, default=200, help='report interval')
+    parser.add_argument('--multi_gpu', type=bool, default=True, help='use multiple GPU')
+    parser.add_argument('--noval', action='store_true', help='do not run validation')
 
-# cv & bagging
-parser.add_argument('--n_splits', type=int, default=5, help='do not run validation')
-parser.add_argument('--bagging_p', type=float, default=0.8, help='bagging ratio')
-parser.add_argument('--bagging_size', type=int, default=0, help='bagging ratio')
+    # model
+    parser.add_argument('--dropout', type=float, default=0.3, help='dropout rate')
 
-args = parser.parse_args()
+    # cv & bagging
+    parser.add_argument('--n_splits', type=int, default=5, help='do not run validation')
+    parser.add_argument('--bagging_p', type=float, default=0.8, help='bagging ratio')
+    parser.add_argument('--bagging_size', type=int, default=0, help='bagging ratio')
 
-# tensorboard stuff
-writer = SummaryWriter()
+    return parser.parse_args()
+
+args = parse_args()
 
 np.random.seed(args.seed)
 torch.manual_seed(args.seed)
@@ -101,26 +102,23 @@ logging('=' * 60)
 pprint.pprint(args.__dict__)
 logging('=' * 60)
 
-def CRPSLoss(y_pred, y):
-    return torch.mean((y_pred.cumsum(-1) - y.cumsum(-1))**2)
+# tensorboard stuff
+writer = SummaryWriter()
 
 def run_epoch(model, loader, opt=None, scheduler=None, _epoch=-1):
     model.eval() if opt is None else model.train()
     dev = next(model.parameters()).device
     batch_id = 0
-    total_loss = 0
+    total_loss = 0 # loss for log interval
     epoch_loss = 0
 
     with torch.enable_grad() if opt else torch.no_grad():
         for _batch in loader:
             X, y, mask = [t.to(dev) for t in _batch]
             y_pred = model(X)
-            #mask[mask == 0] = -1e8
-            #mask[mask == 1] = 0
-            y_pred += mask
             y_pred = F.softmax(y_pred, dim=-1)
             loss = CRPSLoss(y_pred, y)
-            batch_loss = loss.detach()
+            batch_loss = loss.detach().to('cpu').numpy()
             epoch_loss += batch_loss
             total_loss += batch_loss
 
@@ -132,15 +130,14 @@ def run_epoch(model, loader, opt=None, scheduler=None, _epoch=-1):
                 if args.scheduler not in ['dev_perf']:
                     scheduler.step()
 
-                batch_id += 1
+                #batch_id += 1
+                #if batch_id % args.log_interval == 0:
+                #    avg_loss = total_loss / args.log_interval
+                #    print(f"                    LR {opt.param_groups[0]['lr']:.7f} | Loss {avg_loss:.5f}")
+                #    total_loss = 0
 
-                if batch_id % args.log_interval == 0:
-                    avg_loss = total_loss / args.log_interval
-                    print(f"Epoch {_epoch:2d} | LR {opt.param_groups[0]['lr']:.7f} | Loss {avg_loss:.5f}")
-                    total_loss = 0
-
-    torch.cuda.empty_cache()
-    return (epoch_loss / len(loader)).detach().to('cpu').numpy()
+    #torch.cuda.empty_cache()
+    return epoch_loss / len(loader)
 
 def setup_train(max_steps):
     model = NFLRushNet()
@@ -175,33 +172,37 @@ def setup_train(max_steps):
 
     return para_model, optimizer, scheduler
 
-def run_cv(X, X_aug, y, mask, groups, idx_2017, n_splits=5):
+def run_cv(X, X_aug, y, y_clipped, mask, groups, ixs_2017, n_splits=5):
     cv = GroupKFold(n_splits=n_splits)
-    ixs = list(set(list(range(X.shape[0]))) - set(idx_2017)) # non 2017 data
+
+    D = [X, X_aug, y, y_clipped, mask, groups]
+    D_2017 = [d[ixs_2017] for d in D]
+
+    ixs = list(set(range(X.shape[0])) - set(ixs_2017)) # non 2017 data
+    D = [d[ixs] for d in D]
+
+    X, X_aug, y, y_clipped, mask, groups = D
     losses = []
 
-    random_state = 10000
-    for fold_ix, (train_ix, test_ix) in enumerate(cv.split(X[ixs], y[ixs], groups[ixs])):
-        train_ix = list(train_ix) + idx_2017 # add 2017 data to train set
-        n_samples = int(len(train_ix) * args.bagging_p)
-        if args.bagging_size <= 1:
-            args.bagging_size = 1
-        for i in range(args.bagging_size):
-            if args.bagging_size > 1:
-                train_ix = resample(train_ix, replace=True, n_samples=n_samples, random_state=random_state)
-            train_dataset = RushDataset(X[train_ix], X_aug[train_ix], y[train_ix], mask[train_ix])
-            val_dataset = RushDataset(X[test_ix], X_aug[train_ix], y[test_ix], mask[test_ix], aug=False)
+    for fold_ix, (train_ix, test_ix) in enumerate(cv.split(X, y, groups)):
+        D_tr = [np.concatenate([x[train_ix], x_2017]) for x, x_2017 in zip(D, D_2017)]
+        X_tr, X_aug_tr, y_tr, y_clipped_tr, mask_tr, groups_tr = D_tr
 
-            train_loader = DataLoader(train_dataset, batch_size=args.bsz, shuffle=True, drop_last=True)
-            val_loader = DataLoader(val_dataset, batch_size=args.bsz, shuffle=True, drop_last=True)
+        train_dataset = RushDataset(X_tr, X_aug_tr, y_clipped_tr, mask_tr)
+        val_dataset = RushDataset(X[test_ix], X_aug[test_ix], y_clipped[test_ix], mask[test_ix], aug=False)
 
-            val_loss = train_loop(train_loader, val_loader, fold_ix)
-            losses.append(val_loss)
-            random_state += 1
+        #assert len(set(test_ix) & set(ixs_2017)) == 0, "test set should not contain data from 2017"
+        train_loader = DataLoader(train_dataset, batch_size=args.bsz, shuffle=True, drop_last=True)
+        val_loader = DataLoader(val_dataset, batch_size=args.bsz, shuffle=False, drop_last=True)
 
-    print("cv mean loss=", np.array(losses).mean())
+        meta = {'train_ix': train_ix, 'test_ix': test_ix}
+        val_loss = train_loop(train_loader, val_loader, fold_ix, meta)
+        losses.append(val_loss)
 
-def train_loop(train_loader, val_loader, fold_ix=-1):
+    losses = np.array(losses)
+    print(f"cv loss avg({losses.mean()}) ±({losses.std()})")
+
+def train_loop(train_loader, val_loader, fold_ix=0, meta={}):
 
     max_steps = args.max_epochs * len(train_loader)
 
@@ -221,12 +222,14 @@ def train_loop(train_loader, val_loader, fold_ix=-1):
         if not args.noval and val_loader is not None:
             val_loss = run_epoch(model, val_loader)
             end = time.time()
-            msg = f"Epoch {i:2d}|{end-start:.2f}s|lr({opt.param_groups[0]['lr']:.7f})|tr loss({train_loss:.5f})|val loss({val_loss:.5f})"
+            msg = f"{fold_ix}|{i:2d}|{end-start:.2f}s|lr({opt.param_groups[0]['lr']:.7f})|tr loss({train_loss:.5f})|val loss({val_loss:.5f})"
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
-                exp.save_checkpoint(model, opt, fold_ix=fold_ix)
+                meta['val_loss'] = val_loss
+                meta['train_loss'] = train_loss
+                exp.save_checkpoint(model, opt, epoch=i, fold_ix=fold_ix, meta=meta)
                 msg = f"{colored(msg, 'yellow')}"
-            writer.add_scalar(f'loss/{fold_ix}/val', val_loss, i)
+            writer.add_scalar(f'loss/{fold_ix}/val', val_loss)
         else:
             end = time.time()
             msg = f"epoch {i:2d}|{end-start:.2f}s|lr({opt.param_groups[0]['lr']:.7f})|tr loss({train_loss:.5f})"
@@ -242,4 +245,4 @@ def train_loop(train_loader, val_loader, fold_ix=-1):
 
 if __name__ == '__main__':
     X, X_aug, y, y_clipped, mask, groups, idx_2017 = load_data(pathlib.Path('.'))
-    run_cv(X, X_aug, y_clipped, mask, groups, idx_2017, args.n_splits)
+    run_cv(X, X_aug, y, y_clipped, mask, groups, idx_2017, args.n_splits)
