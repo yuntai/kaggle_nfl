@@ -15,26 +15,13 @@ name = 'nflrush'
 exproot = rootdir/'models'/name
 
 D = load_data(rootdir)
+*D, idx_2017 = D
 assert all(d.shape[0]==D[0].shape[0] for d in D[:-1])
-idx_2017 = D[-1]
-
-ixs = list(set(range(D[0].shape[0])) - set(idx_2017)) # non 2017 data
-D = [d[ixs] for d in D[:-1]]
 X, X_aug, y, mask, groups = D
 
-members = []
-dev = 'cuda'
-for _dir in exproot.iterdir():
-    with open(_dir/'model.pt', 'rb') as f:
-        model = torch.load(f)
-    model.to(dev)
-    model.eval()
-    members.append(model)
-
-print("members=", len(members))
-
-val_dataset = RushDataset(X, X_aug, y, mask, aug=False, tta=True)
-val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False, drop_last=True)
+train_dataset = RushDataset(X, X_aug, y, mask, aug=True)
+train_loader = DataLoader(train_dataset, batch_size=64, shuffle=False, drop_last=True)
+max_epochs = 40
 
 with torch.no_grad():
     loss = 0

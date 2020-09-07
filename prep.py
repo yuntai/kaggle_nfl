@@ -11,54 +11,53 @@ def get_one_hot(targets, nb_classes):
     res = np.eye(nb_classes)[np.array(targets).reshape(-1)]
     return res.reshape(list(targets.shape)+[nb_classes])
 
-def preprocess(datadir):
-    train = pd.read_csv(datadir/'train.csv', low_memory=False)
+def preprocess(df):
 
     # fix team abbr
     abbr_corrections = {'BLT': 'BAL', 'CLV': 'CLE', 'ARZ': 'ARI', 'HST': 'HOU'}
     for k, v in abbr_corrections.items():
-        train.loc[train.PossessionTeam == k, 'PossessionTeam'] = v
-        train.loc[train.FieldPosition == k, 'FieldPosition'] = v
-        train.loc[train.HomeTeamAbbr == k, 'HomeTeamAbbr'] = v
+        df.loc[df.PossessionTeam == k, 'PossessionTeam'] = v
+        df.loc[df.FieldPosition == k, 'FieldPosition'] = v
+        df.loc[df.HomeTeamAbbr == k, 'HomeTeamAbbr'] = v
 
     # find offender/defender and rusher
-    train['Offender'] = (train.HomeTeamAbbr == train.PossessionTeam) & (train.Team == 'home') | (train.HomeTeamAbbr != train.PossessionTeam) & (train.Team == 'away')
-    train['Rusher'] = train.NflIdRusher == train.NflId
+    df['Offender'] = (df.HomeTeamAbbr == df.PossessionTeam) & (df.Team == 'home') | (df.HomeTeamAbbr != df.PossessionTeam) & (df.Team == 'away')
+    df['Rusher'] = df.NflIdRusher == df.NflId
 
     # some NA in Dir; should be okay as speed = 0
-    assert train[train.Dir.isna() & (train.S != 0.0)].size == 0
-    train.Dir.fillna(0., inplace=True)
+    assert df[df.Dir.isna() & (df.S != 0.0)].size == 0
+    df.Dir.fillna(0., inplace=True)
 
-    train['dir'] = -(train.Dir * np.pi/180. - np.pi/2.) # adjusted & radian
-    train['Y_aug'] = 53.33 - train['Y'] # y coordinates flipe
+    df['dir'] = -(df.Dir * np.pi/180. - np.pi/2.) # adjusted & radian
+    df['Y_aug'] = 53.33 - df['Y'] # y coordinates flipe
 
     # field postion NA when YardLine = 50
-    assert train.loc[train.FieldPosition.isna() & (train.YardLine != 50)].shape[0] == 0
+    assert df.loc[df.FieldPosition.isna() & (df.YardLine != 50)].shape[0] == 0
 
     # adjust yardline to x-axis
-    __mask = ~train.FieldPosition.isna() & ((train.FieldPosition != train.PossessionTeam) & (train.PlayDirection == 'right') | (train.FieldPosition == train.PossessionTeam) & (train.PlayDirection == 'left'))
-    train.loc[__mask, 'YardLine'] = 100 - train.loc[__mask, 'YardLine']
+    __mask = ~df.FieldPosition.isna() & ((df.FieldPosition != df.PossessionTeam) & (df.PlayDirection == 'right') | (df.FieldPosition == df.PossessionTeam) & (df.PlayDirection == 'left'))
+    df.loc[__mask, 'YardLine'] = 100 - df.loc[__mask, 'YardLine']
 
     # fix Speed column for 2017 season
-    __2017_season = train.Season == 2017
-    train.loc[__2017_season, 'S'] = 10 * train.loc[__2017_season, 'Dis']
+    __2017_season = df.Season == 2017
+    df.loc[__2017_season, 'S'] = 10 * df.loc[__2017_season, 'Dis']
 
-    train['dx'] = train.S * np.cos(train.dir)
-    train['dy'] = train.S * np.sin(train.dir)
-    train['dy_aug'] = -train['dy']
+    df['dx'] = df.S * np.cos(df.dir)
+    df['dy'] = df.S * np.sin(df.dir)
+    df['dy_aug'] = -df['dy']
 
     # make it always from left to right
-    __mask = (train.PlayDirection == 'left')
-    train.loc[__mask, 'X'] = 120 - train.loc[__mask, 'X'] # range 0 ~ 120
-    train.loc[__mask, 'Y'] = 53.33 - train.loc[__mask, 'Y']
-    train.loc[__mask, 'Y_aug'] = 53.33 - train.loc[__mask, 'Y_aug']
-    train.loc[__mask, 'dx'] = -train.loc[__mask, 'dx']
-    train.loc[__mask, 'dy'] = -train.loc[__mask, 'dy']
-    train.loc[__mask, 'dy_aug'] = -train.loc[__mask, 'dy_aug']
-    train.loc[__mask, 'YardLine'] = 100 - train.loc[__mask, 'YardLine']
+    __mask = (df.PlayDirection == 'left')
+    df.loc[__mask, 'X'] = 120 - df.loc[__mask, 'X'] # range 0 ~ 120
+    df.loc[__mask, 'Y'] = 53.33 - df.loc[__mask, 'Y']
+    df.loc[__mask, 'Y_aug'] = 53.33 - df.loc[__mask, 'Y_aug']
+    df.loc[__mask, 'dx'] = -df.loc[__mask, 'dx']
+    df.loc[__mask, 'dy'] = -df.loc[__mask, 'dy']
+    df.loc[__mask, 'dy_aug'] = -df.loc[__mask, 'dy_aug']
+    df.loc[__mask, 'YardLine'] = 100 - df.loc[__mask, 'YardLine']
 
-    # create augmented feature for all rows and select during training
-    play_group = train.groupby('PlayId', sort=True)
+    # create augmented feature for all rows and select during dfing
+    play_group = df.groupby('PlayId', sort=True)
     play_df = play_group[['Yards', 'YardLine', 'Season', 'GameId']].first().reset_index()
     play_df['YardsClipped'] = play_df.Yards.clip(YARDS_CLIP[0], YARDS_CLIP[1])
 
@@ -108,8 +107,9 @@ def load_data(rootdir):
         return torch.load(f)
 
 if __name__ == '__main__':
-    rootdir = pathlib.Path('.')
-    data = preprocess(rootdir/'data')
-    with gzip.open(rootdir/'processed/data.pkl.gz', 'wb') as f:
-        torch.save(data, f)
+    datadir = pathlib.Path('.')/'data'
+    df = pd.read_csv(datadir/'train.csv', low_memory=False)
+    data = preprocess(df)
+    #with gzip.open(rootdir/'processed/data.pkl.gz', 'wb') as f:
+    #    torch.save(data, f)
 

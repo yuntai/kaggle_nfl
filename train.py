@@ -13,7 +13,7 @@ from torch.utils.data import TensorDataset, DataLoader
 from torch import optim
 import torch.nn as nn
 import torch.nn.functional as F
-from tensorboardX import SummaryWriter
+#from tensorboardX import SummaryWriter
 import sklearn
 from sklearn.model_selection import GroupKFold
 from sklearn.utils import resample
@@ -51,7 +51,7 @@ def parse_args():
     parser.add_argument('--lr_min', type=float, default=0.0, help='minimum learning rate during annealing')
 
     # Onecycle
-    parser.add_argument('--lr_max', type=float, default=0.0005, help='maximum learning rate in onecycle scheduler')
+    parser.add_argument('--lr_max', type=float, default=0.001, help='maximum learning rate in onecycle scheduler')
 
     parser.add_argument('--grad_clip', type=float, default=0.25, help='gradient clipping')
     parser.add_argument('--log_interval', type=int, default=200, help='report interval')
@@ -63,8 +63,8 @@ def parse_args():
 
     # cv & bagging
     parser.add_argument('--n_splits', type=int, default=5, help='do not run validation')
-    parser.add_argument('--bagging_p', type=float, default=0.8, help='bagging ratio')
-    parser.add_argument('--bagging_size', type=int, default=0, help='bagging ratio')
+    parser.add_argument('--bagging_p', type=float, default=0.9, help='bagging ratio')
+    parser.add_argument('--bagging_size', type=int, default=4, help='bagging ratio')
 
     return parser.parse_args()
 
@@ -103,7 +103,7 @@ pprint.pprint(args.__dict__)
 logging('=' * 60)
 
 # tensorboard stuff
-writer = SummaryWriter()
+#writer = SummaryWriter()
 
 def run_epoch(model, loader, opt=None, scheduler=None, _epoch=-1):
     model.eval() if opt is None else model.train()
@@ -172,37 +172,58 @@ def setup_train(max_steps):
 
     return para_model, optimizer, scheduler
 
+def run_final(X, X_aug, y, mask, n_bagging=4, bagging_p=0.9, aug=True, aug_p=0.5, batch_size=64):
+    ixs_tr = list(range(X.shape[0]))
+    n_samples = int(len(ixs_tr) * bagging_p)
+
+    random_state = 1000
+    for i in range(n_bagging):
+        ixs = resample(ixs_tr, n_samples=n_samples, random_state=random_state)
+        train_dataset = RushDataset(X[ixs], X_aug[ixs], y[ixs], mask[ixs], aug=aug, aug_p=0.5)
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
+        loss = train_loop(train_loader, bagging_ix=i)
+        print("train loss=", loss)
+        random_state += 1
+
 def run_cv(X, X_aug, y, mask, groups, ixs_2017, n_splits=5):
     cv = GroupKFold(n_splits=n_splits)
 
     D = [X, X_aug, y, mask, groups]
-    D_2017 = [d[ixs_2017] for d in D]
 
-    ixs = list(set(range(X.shape[0])) - set(ixs_2017)) # non 2017 data
-    D = [d[ixs] for d in D]
+    ixs_no_2017 = list(set(range(X.shape[0])) - set(ixs_2017)) # non 2017 data
+
+    D_2017 = [d[ixs_2017] for d in D]
+    D = [d[ixs_no_2017] for d in D]
 
     X, X_aug, y, mask, groups = D
-    losses = []
 
+    total_losses = []
     for fold_ix, (train_ix, test_ix) in enumerate(cv.split(X, y, groups)):
         D_tr = [np.concatenate([x[train_ix], x_2017]) for x, x_2017 in zip(D, D_2017)]
         X_tr, X_aug_tr, y_tr, mask_tr, groups_tr = D_tr
 
-        train_dataset = RushDataset(X_tr, X_aug_tr, y_tr, mask_tr)
-        val_dataset = RushDataset(X[test_ix], X_aug[test_ix], y[test_ix], mask[test_ix], aug=False)
+        ixs_tr = list(range(X_tr.shape[0]))
+        n_samples = int(len(ixs_tr) * args.bagging_p)
 
-        #assert len(set(test_ix) & set(ixs_2017)) == 0, "test set should not contain data from 2017"
-        train_loader = DataLoader(train_dataset, batch_size=args.bsz, shuffle=True, drop_last=True)
-        val_loader = DataLoader(val_dataset, batch_size=args.bsz, shuffle=False, drop_last=True)
+        bagging_losses = []
+        for bagging_ix in range(args.bagging_size):
+            ixs = resample(ixs_tr, n_samples=n_samples)
 
-        meta = {'train_ix': train_ix, 'test_ix': test_ix}
-        val_loss = train_loop(train_loader, val_loader, fold_ix, meta)
-        losses.append(val_loss)
+            train_dataset = RushDataset(X_tr[ixs], X_aug_tr[ixs], y_tr[ixs], mask_tr[ixs])
+            val_dataset = RushDataset(X[test_ix], X_aug[test_ix], y[test_ix], mask[test_ix], aug=False)
 
-    losses = np.array(losses)
+            #assert len(set(test_ix) & set(ixs_2017)) == 0, "test set should not contain data from 2017"
+            train_loader = DataLoader(train_dataset, batch_size=args.bsz, shuffle=True, drop_last=True, num_workers=4)
+            val_loader = DataLoader(val_dataset, batch_size=args.bsz, shuffle=False, drop_last=True)
+            val_loss = train_loop(train_loader, val_loader, fold_ix, bagging_ix)
+            bagging_losses.append(val_loss)
+            total_loss.append(val_loss)
+        print("loss=", np.array(bagging_losses).mean())
+
+    losses = np.array(total_loss)
     print(f"cv loss avg({losses.mean()}) ±({losses.std()})")
 
-def train_loop(train_loader, val_loader, fold_ix=0, meta={}):
+def train_loop(train_loader, val_loader=None, fold_ix=0, bagging_ix=0, meta={}):
 
     max_steps = args.max_epochs * len(train_loader)
 
@@ -215,34 +236,41 @@ def train_loop(train_loader, val_loader, fold_ix=0, meta={}):
     start_epoch = 1
     best_val_loss = float('inf')
 
-    for i in range(start_epoch, args.max_epochs+1):
+    for epoch_i in range(start_epoch, args.max_epochs+1):
         start = time.time()
-        train_loss = run_epoch(model, train_loader, opt, scheduler, _epoch=i)
-        writer.add_scalar(f'loss/{fold_ix}/train', train_loss, i)
-        if not args.noval and val_loader is not None:
+        train_loss = run_epoch(model, train_loader, opt, scheduler, _epoch=epoch_i)
+        #writer.add_scalar(f'loss/{fold_ix}/{bagging_ix}', {'train': train_loss}, epoch_i)
+        if not args.noval:
             val_loss = run_epoch(model, val_loader)
             end = time.time()
-            msg = f"{fold_ix}|{i:2d}|{end-start:.2f}s|lr({opt.param_groups[0]['lr']:.7f})|tr loss({train_loss:.5f})|val loss({val_loss:.5f})"
+            msg = f"{fold_ix}|{bagging_ix}|{epoch_i}|{end-start:.2f}s|lr({opt.param_groups[0]['lr']:.7f})|tr loss({train_loss:.5f})|val loss({val_loss:.5f})"
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 meta['val_loss'] = val_loss
                 meta['train_loss'] = train_loss
-                exp.save_checkpoint(model, opt, epoch=i, fold_ix=fold_ix, meta=meta)
+                exp.save_checkpoint(model, opt, epoch=epoch_i, fold_ix=fold_ix, bagging_ix=bagging_ix, meta=meta)
                 msg = f"{colored(msg, 'yellow')}"
-            writer.add_scalar(f'loss/{fold_ix}/val', val_loss)
+                #writer.add_scalar(f'loss/{fold_ix}/{bagging_ix}', {'val':val_loss}, epoch_i)
         else:
             end = time.time()
-            msg = f"epoch {i:2d}|{end-start:.2f}s|lr({opt.param_groups[0]['lr']:.7f})|tr loss({train_loss:.5f})"
+            msg = f"{fold_ix}/{bagging_ix}/{epoch_i:2d}|{end-start:.2f}s|lr({opt.param_groups[0]['lr']:.7f})|loss({train_loss:.5f})"
+            best_val_loss = train_loss
         print(msg)
         lr = opt.param_groups[0]['lr']
-        writer.add_scalar(f'learning_rate/{fold_ix}', lr, i)
+        #writer.add_scalar(f'learning_rate/{fold_ix}/{bagging_ix}', lr, epoch_i)
 
         if args.scheduler == 'dev_perf':
             scheduler.step(val_loss if not args.noval else train_loss)
 
-    print(f"best val={best_val_loss}")
+    if args.noval:
+        meta['train_loss'] = best_val_loss
+        exp.save_checkpoint(model, opt, fold_ix=fold_ix, bagging_ix=bagging_ix, meta=meta)
+
     return best_val_loss
 
 if __name__ == '__main__':
     X, X_aug, y, mask, groups, idx_2017 = load_data(pathlib.Path('.'))
+
     run_cv(X, X_aug, y, mask, groups, idx_2017, args.n_splits)
+
+    #run_final(X, X_aug, y, mask, batch_size=args.bsz)
