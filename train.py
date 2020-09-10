@@ -25,6 +25,7 @@ from dataset import RushDataset
 from net import NFLRushNet
 from common import CRPSLoss
 from prep import load_data
+import onecyclelr
 
 
 def parse_args():
@@ -39,18 +40,18 @@ def parse_args():
     parser.add_argument('--lr', type=float, default=0.001, help='initial learning rate (0.0001|5 for adam|sgd)')
     parser.add_argument('-s', '--scheduler', default='onecycle', type=str, choices=['cosine', 'inv_sqrt', 'dev_perf','onecycle']),
 
-    # Cosine
+    # cosine scheduler
     parser.add_argument('--eta_min', type=float, default=1e-7, help='min learning rate for cosine scheduler')
 
-    # dev_perf
+    # dev_perf scheduler
     parser.add_argument('--warmup_step', type=int, default=5000, help='upper epoch limit')
 
-    # ReduceLROnPlateau
+    # ReduceLROnPlateau scheduler
     parser.add_argument('--decay_rate', type=float, default=0.5, help='decay factor when ReduceLROnPlateau is used')
     parser.add_argument('--patience', type=int, default=5, help='patience')
     parser.add_argument('--lr_min', type=float, default=0.0, help='minimum learning rate during annealing')
 
-    # Onecycle
+    # Onecycle scheduler
     parser.add_argument('--lr_max', type=float, default=0.001, help='maximum learning rate in onecycle scheduler')
 
     parser.add_argument('--grad_clip', type=float, default=0.25, help='gradient clipping')
@@ -64,7 +65,7 @@ def parse_args():
     # cv & bagging
     parser.add_argument('--n_splits', type=int, default=5, help='do not run validation')
     parser.add_argument('--bagging_p', type=float, default=0.9, help='bagging ratio')
-    parser.add_argument('--bagging_size', type=int, default=4, help='bagging ratio')
+    parser.add_argument('--bagging_size', type=int, default=0, help='bagging ratio')
 
     return parser.parse_args()
 
@@ -162,7 +163,8 @@ def setup_train(max_steps):
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=args.decay_rate,
                                                          patience=args.patience, min_lr=args.lr_min)
     elif args.scheduler == 'onecycle':
-        scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=args.lr_max, total_steps=max_steps)
+        #scheduler = optim.lr_scheduler.OneCycleLR(optimizer, max_lr=args.lr_max, total_steps=max_steps)
+        scheduler = onecyclelr.OneCycleLR(optimizer, lr_range=(0.0005, 0.001), num_steps=max_steps)
 
     if args.multi_gpu:
         model = model.to(device)
@@ -177,11 +179,11 @@ def run_final(X, X_aug, y, mask, n_bagging=4, bagging_p=0.9, aug=True, aug_p=0.5
     n_samples = int(len(ixs_tr) * bagging_p)
 
     random_state = 1000
-    for i in range(n_bagging):
+    for bagging_ix in range(n_bagging):
         ixs = resample(ixs_tr, n_samples=n_samples, random_state=random_state)
         train_dataset = RushDataset(X[ixs], X_aug[ixs], y[ixs], mask[ixs], aug=aug, aug_p=0.5)
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
-        loss = train_loop(train_loader, bagging_ix=i)
+        loss = train_loop(train_loader, bagging_ix=bagging_ix)
         print("train loss=", loss)
         random_state += 1
 
@@ -203,24 +205,36 @@ def run_cv(X, X_aug, y, mask, groups, ixs_2017, n_splits=5):
         X_tr, X_aug_tr, y_tr, mask_tr, groups_tr = D_tr
 
         ixs_tr = list(range(X_tr.shape[0]))
-        n_samples = int(len(ixs_tr) * args.bagging_p)
 
+        if args.bagging_size <= 1:
+            args.bagging_size = 1
+        else:
+            n_samples = int(len(ixs_tr) * args.bagging_p)
+
+        total_losses = []
         bagging_losses = []
         for bagging_ix in range(args.bagging_size):
-            ixs = resample(ixs_tr, n_samples=n_samples)
+            if args.bagging_size > 1:
+                ixs = resample(ixs_tr, n_samples=n_samples)
+            else:
+                ixs = ixs_tr
 
             train_dataset = RushDataset(X_tr[ixs], X_aug_tr[ixs], y_tr[ixs], mask_tr[ixs])
             val_dataset = RushDataset(X[test_ix], X_aug[test_ix], y[test_ix], mask[test_ix], aug=False)
 
             #assert len(set(test_ix) & set(ixs_2017)) == 0, "test set should not contain data from 2017"
-            train_loader = DataLoader(train_dataset, batch_size=args.bsz, shuffle=True, drop_last=True, num_workers=4)
+            #train_loader = DataLoader(train_dataset, batch_size=args.bsz, shuffle=True, drop_last=True, num_workers=4)
+            train_loader = DataLoader(train_dataset, batch_size=args.bsz, shuffle=True, drop_last=True)
             val_loader = DataLoader(val_dataset, batch_size=args.bsz, shuffle=False, drop_last=True)
             val_loss = train_loop(train_loader, val_loader, fold_ix, bagging_ix)
-            bagging_losses.append(val_loss)
-            total_loss.append(val_loss)
-        print("loss=", np.array(bagging_losses).mean())
+            if args.bagging_size > 1:
+                bagging_losses.append(val_loss)
+            total_losses.append(val_loss)
 
-    losses = np.array(total_loss)
+        if args.bagging_size > 1:
+            print("loss=", np.array(bagging_losses).mean())
+
+    losses = np.array(total_losses)
     print(f"cv loss avg({losses.mean()}) ±({losses.std()})")
 
 def train_loop(train_loader, val_loader=None, fold_ix=0, bagging_ix=0, meta={}):
