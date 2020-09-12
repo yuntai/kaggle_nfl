@@ -209,6 +209,7 @@ import functools
 
 import torch
 import time
+import torch.nn as nn
 
 def logging(s, log_path=None, print_=True, log=True):
     if print_:
@@ -218,12 +219,12 @@ def logging(s, log_path=None, print_=True, log=True):
             f_log.write(s + '\n')
 
 class Experiment:
-    def __init__(self, exp_dir, script_to_save=[]):
-        self.exp_dir = exp_dir
-        self.exp_dir.mkdir(parents=True, exist_ok=True)
+    def __init__(self, exproot, script_to_save=[]):
+        self.exproot = exproot
+        self.exproot.mkdir(parents=True, exist_ok=True)
 
         if script_to_save:
-            script_path = exp_dir/'scripts'
+            script_path = exproot/'scripts'
             script_path.mkdir(parents=True, exist_ok=True)
             for fn in script_to_save:
                 dst_file = script_path/os.path.basename(fn)
@@ -235,24 +236,24 @@ class Experiment:
         return time.strftime('%Y%m%d%H%M%S')
 
     def get_logger(self, print_=True, log=False):
-        log_path = self.exp_dir/'log.txt' if log else None
+        log_path = self.exproot/'log.txt' if log else None
         return functools.partial(logging, log_path=log_path, print_=print_, log=log)
 
-    def load_checkpoint(self):
-        pass
+    def load_checkpoint(self, fold_ix, bagging_ix):
+        exp_dir = self.exproot/f"{fold_ix}"/f"{bagging_ix}"
+        return torch.load(exp_dir/'checkpoint')
 
-    def save_checkpoint(self, model, optimizer, fold_ix=0, bagging_ix=0, epoch=0, meta={}):
-        exp_dir = self.exp_dir/f"{fold_ix}"/f"{bagging_ix}"
+    def save_checkpoint(self, model, optimizer, fold_ix=0, bagging_ix=0, meta={}):
+        exp_dir = self.exproot/f"{fold_ix}"/f"{bagging_ix}"
         exp_dir.mkdir(parents=True, exist_ok=True)
-        with open(exp_dir/f'model.pt', 'wb') as f:
-            torch.save(model, f)
-        with open(exp_dir/f'optimizer.pt', 'wb') as f:
-            torch.save(optimizer.state_dict(), f)
-        if epoch:
-            meta['epoch'] = epoch
-        with open(exp_dir/f'meta.pt', 'wb') as f:
-            torch.save(meta, f)
-
+        checkpoint = {
+            'model_state_dict': model.module.state_dict() if isinstance(model, nn.DataParallel) else model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'fold_ix': fold_ix,
+            'bagging_ix': bagging_ix,
+        }
+        checkpoint.update(meta)
+        torch.save(checkpoint, exp_dir/'checkpoint')
 
 def get_logger(log_path, **kwargs):
     return functools.partial(logging, log_path=log_path, **kwargs)
